@@ -247,7 +247,19 @@ function selectTemplate(id) {
     if (!template) return;
 
     activeTemplate = template;
-    formData = {};
+    
+    // Load draft
+    const savedDraft = localStorage.getItem('draft_' + id);
+    if (savedDraft) {
+        try {
+            formData = JSON.parse(savedDraft);
+            showToast('Draft sebelumnya berhasil dimuat', 'success');
+        } catch(e) {
+            formData = {};
+        }
+    } else {
+        formData = {};
+    }
 
     // Update template cards
     document.querySelectorAll('.template-card').forEach(c => c.classList.remove('active'));
@@ -268,11 +280,13 @@ function selectTemplate(id) {
     // Build form
     buildForm(template);
 
-    // Initialize array fields with one empty item
+    // Initialize array fields with one empty item if undefined or empty
     template.sections.forEach(section => {
         section.fields.forEach(field => {
             if (field.type === 'array') {
-                formData[field.id] = [{}];
+                if (!formData[field.id] || formData[field.id].length === 0) {
+                    formData[field.id] = [{}];
+                }
             }
         });
     });
@@ -342,8 +356,12 @@ function buildField(field, prefix = '') {
 
     // Listen for input changes
     const inputEl = group.querySelector('.form-control');
+    if (formData[fieldId]) {
+        inputEl.value = formData[fieldId];
+    }
     inputEl.addEventListener('input', () => {
         formData[fieldId] = inputEl.value;
+        saveDraft();
         schedulePreviewUpdate();
     });
 
@@ -393,6 +411,7 @@ function buildArrayField(field) {
                 const inputEl = fg.querySelector('.form-control');
                 inputEl.addEventListener('input', () => {
                     formData[field.id][idx][sf.id] = inputEl.value;
+                    saveDraft();
                     schedulePreviewUpdate();
                 });
 
@@ -404,6 +423,7 @@ function buildArrayField(field) {
             removeBtns.forEach(btn => {
                 btn.addEventListener('click', () => {
                     formData[field.id].splice(parseInt(btn.dataset.idx), 1);
+                    saveDraft();
                     renderItems();
                     schedulePreviewUpdate();
                 });
@@ -418,6 +438,7 @@ function buildArrayField(field) {
         addBtn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Tambah Item`;
         addBtn.addEventListener('click', () => {
             formData[field.id].push({});
+            saveDraft();
             renderItems();
         });
         arrayContainer.appendChild(addBtn);
@@ -426,6 +447,12 @@ function buildArrayField(field) {
     renderItems();
     wrapper.appendChild(arrayContainer);
     return wrapper;
+}
+
+function saveDraft() {
+    if (activeTemplate) {
+        localStorage.setItem('draft_' + activeTemplate.id, JSON.stringify(formData));
+    }
 }
 
 // ===== Preview =====
@@ -612,23 +639,23 @@ function renderEvaluasi(doc, data) {
         doc.text(cleanLabel, xOffset, startY);
         
         // Explicitly format the table so colons are precisely aligned
-        doc.text(':', xOffset + 28, startY);
+        doc.text(':', xOffset + 30, startY);
         
-        const labelW = 32;
+        const labelW = 33;
         const lines = doc.splitTextToSize(String(val), maxWidth - labelW);
         doc.text(lines, xOffset + labelW, startY);
         return startY + (lines.length * 5);
     };
 
     let leftY = y;
-    leftY = drawFieldInfo('Nama             :', data.nama || '-', margin, leftY, 75);
-    leftY = drawFieldInfo('Jenis Kelamin :', data.jenisKelamin || '-', margin, leftY, 75);
-    leftY = drawFieldInfo('No. Pasien     :', data.noPasien || '-', margin, leftY, 75);
+    leftY = drawFieldInfo('Nama', data.nama || '-', margin, leftY, 80);
+    leftY = drawFieldInfo('Jenis Kelamin', data.jenisKelamin || '-', margin, leftY, 80);
+    leftY = drawFieldInfo('No. Pasien', data.noPasien || '-', margin, leftY, 80);
 
     let rightY = y;
-    rightY = drawFieldInfo('Umur / Tgl. Lahir:', calculateAgeAndFormatDate(data.tanggalLahir), margin + 80, rightY, 90);
-    rightY = drawFieldInfo('Nama Orang tua:', data.namaOrtu || '-', margin + 80, rightY, 90);
-    rightY = drawFieldInfo('Nama Terapis    :', data.namaTerapis || '-', margin + 80, rightY, 90);
+    rightY = drawFieldInfo('Umur / Tgl. Lahir', calculateAgeAndFormatDate(data.tanggalLahir), margin + 90, rightY, 80);
+    rightY = drawFieldInfo('Nama Orang tua', data.namaOrtu || '-', margin + 90, rightY, 80);
+    rightY = drawFieldInfo('Nama Terapis', data.namaTerapis || '-', margin + 90, rightY, 80);
 
     y = Math.max(leftY, rightY) + 6;
     doc.setDrawColor(50, 50, 50);
@@ -641,12 +668,14 @@ function renderEvaluasi(doc, data) {
         if (!text) return [];
         doc.setFont('helvetica', options.bold ? 'bold' : 'normal');
         doc.setFontSize(9);
-        const lines = doc.splitTextToSize(text, maxWidth);
+        const actualWidth = options.indent ? (maxWidth - options.indent) : maxWidth;
+        const lines = doc.splitTextToSize(text, actualWidth);
         return lines.map((line, idx) => ({
             text: line,
             bold: options.bold || false,
             justify: options.justify || false,
             indent: options.indent || 0,
+            prefix: (idx === 0 && options.prefix) ? options.prefix : null,
             isLastLine: idx === lines.length - 1
         }));
     };
@@ -671,6 +700,7 @@ function renderEvaluasi(doc, data) {
             let isJustify = typeof lineItem === 'object' && lineItem.justify;
             let isLastLine = typeof lineItem === 'object' && lineItem.isLastLine;
             let indent = typeof lineItem === 'object' ? (lineItem.indent || 0) : 0;
+            let prefix = typeof lineItem === 'object' ? lineItem.prefix : null;
 
             if (currentY > 280) {
                 doc.setDrawColor(150, 150, 150);
@@ -688,6 +718,10 @@ function renderEvaluasi(doc, data) {
 
             let baseCurX = margin + 5 + indent;
             let availableW = contentW - 10 - indent;
+
+            if (prefix) {
+                doc.text(prefix, margin + 5, currentY);
+            }
 
             if (isJustify && !isLastLine && text.trim().indexOf(' ') !== -1) {
                 const words = text.trim().split(' ');
@@ -718,16 +752,16 @@ function renderEvaluasi(doc, data) {
     
     if (hasProblematika) {
         let probLines = [];
-        if(data.keluhanUtama) probLines.push(...wrapLinesToBox(`1. Keluhan Utama: ${data.keluhanUtama}`, contentW - 10));
-        if(data.impairment) probLines.push(...wrapLinesToBox(`2. Impairment: ${data.impairment}`, contentW - 10));
-        if(data.functionalLimitation) probLines.push(...wrapLinesToBox(`3. Functional Limitation: ${data.functionalLimitation}`, contentW - 10));
-        if(data.participation) probLines.push(...wrapLinesToBox(`4. Participation: ${data.participation}`, contentW - 10));
+        if(data.keluhanUtama) probLines.push(...wrapLinesToBox(`Keluhan Utama: ${data.keluhanUtama}`, contentW - 10, { prefix: '1.', indent: 5, justify: true }));
+        if(data.impairment) probLines.push(...wrapLinesToBox(`Impairment: ${data.impairment}`, contentW - 10, { prefix: '2.', indent: 5, justify: true }));
+        if(data.functionalLimitation) probLines.push(...wrapLinesToBox(`Functional Limitation: ${data.functionalLimitation}`, contentW - 10, { prefix: '3.', indent: 5, justify: true }));
+        if(data.participation) probLines.push(...wrapLinesToBox(`Participation: ${data.participation}`, contentW - 10, { prefix: '4.', indent: 5, justify: true }));
         if (probLines.length === 0) {
             probLines = [
-                '1. Keluhan Utama: ', '',
-                '2. Impairment: ', '',
-                '3. Functional Limitation: ', '',
-                '4. Participation: ', ''
+                { prefix: '1.', text: 'Keluhan Utama: ', indent: 5 }, '',
+                { prefix: '2.', text: 'Impairment: ', indent: 5 }, '',
+                { prefix: '3.', text: 'Functional Limitation: ', indent: 5 }, '',
+                { prefix: '4.', text: 'Participation: ', indent: 5 }, ''
             ];
         }
         drawSectionBox('Ringkasan Problematika ' + activeTemplate.typeLabel, probLines);
@@ -746,24 +780,28 @@ function renderEvaluasi(doc, data) {
 
     let programLines = [];
     (data.programFisio || []).forEach((p, i) => {
-        if (p.kegiatan) programLines.push(...wrapLinesToBox(`${i+1}. ${p.kegiatan}`, contentW - 10));
+        if (p.kegiatan) programLines.push(...wrapLinesToBox(`${p.kegiatan}`, contentW - 10, { prefix: `${i+1}.`, indent: 5, justify: true }));
     });
-    if(programLines.length === 0) programLines = ['1. ', '2. ', '3. ', '4. ', '5. '];
+    if(programLines.length === 0) programLines = [
+        { prefix: '1.', text: ' ', indent: 5 }, { prefix: '2.', text: ' ', indent: 5 }
+    ];
     drawSectionBox('Program ' + activeTemplate.typeLabel, programLines);
 
     let hasilLines = [];
     (data.hasilEvaluasi || []).forEach((h, i) => {
         if (h.aspek) hasilLines.push(...wrapLinesToBox(`${i+1}. ${h.aspek}`, contentW - 10, { bold: true }));
-        if (h.hasil) hasilLines.push(...wrapLinesToBox(`${h.hasil}`, contentW - 15, { justify: true, indent: 5 }));
+        if (h.hasil) hasilLines.push(...wrapLinesToBox(`${h.hasil}`, contentW - 10, { justify: true, indent: 5 }));
     });
     if(hasilLines.length === 0) hasilLines = ['1. ', ' ', '2. ', ' ', '3. ', ' '];
     drawSectionBox('Hasil Evaluasi ' + activeTemplate.typeLabel, hasilLines);
 
     let homeLines = [];
     (data.homeProgram || []).forEach((h, i) => {
-        if (h.instruksi) homeLines.push(...wrapLinesToBox(`${i+1}. ${h.instruksi}`, contentW - 10));
+        if (h.instruksi) homeLines.push(...wrapLinesToBox(`${h.instruksi}`, contentW - 10, { prefix: `${i+1}.`, indent: 5, justify: true }));
     });
-    if(homeLines.length === 0) homeLines = ['1. ', '2. ', '3. ', '4. '];
+    if(homeLines.length === 0) homeLines = [
+        { prefix: '1.', text: ' ', indent: 5 }, { prefix: '2.', text: ' ', indent: 5 }
+    ];
     drawSectionBox('Home Program ' + activeTemplate.typeLabel, homeLines);
 
     let saranLines = [];
